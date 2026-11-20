@@ -36,6 +36,7 @@ function toast(text, cls = '') {
   el.className = `toast ${cls}`;
   el.textContent = text;
   $toasts.append(el);
+  while ($toasts.children.length > 2) $toasts.firstChild.remove(); // não cobre a mesa
   setTimeout(() => el.remove(), 3000);
 }
 
@@ -166,6 +167,25 @@ function announce(s, e) {
 
 // ---------------------------------------------------------------- telas
 
+// Cada tela é uma lista de seções [chave, html]. Só o que mudou é redesenhado,
+// para não reiniciar animações nem perder um toque no meio de uma atualização.
+const mounted = new Map();
+let mountedKeys = '';
+function mount(sections) {
+  const keys = sections.map(([k]) => k).join();
+  if (keys !== mountedKeys) {
+    mountedKeys = keys;
+    mounted.clear();
+    $app.replaceChildren(...sections.map(() => Object.assign(document.createElement('div'), { className: 'section' })));
+  }
+  sections.forEach(([k, html], i) => {
+    if (mounted.get(k) === html) return;
+    mounted.set(k, html);
+    $app.children[i].innerHTML = html;
+  });
+}
+const onTable = new Set(); // cartas já mostradas na mesa (só as novas animam)
+
 function cardHtml(card, cls = '', attrs = '') {
   if (!card) return `<div class="card back ${cls}"></div>`;
   const red = card[1] === 'o' || card[1] === 'c' ? 'red' : '';
@@ -175,7 +195,8 @@ function cardHtml(card, cls = '', attrs = '') {
 }
 
 function renderHome() {
-  $app.innerHTML = `
+  mounted.clear(); // a tela inicial sempre é refeita (campos de texto)
+  mount([['home', `
     <div class="screen">
       <div class="logo"><h1>🃏 Truco</h1><p>Truco paulista online com os amigos</p></div>
       <div class="panel">
@@ -203,7 +224,7 @@ function renderHome() {
           <button class="btn" data-act="join">Entrar</button>
         </div>
       </div>`}
-    </div>`;
+    </div>`]]);
 }
 
 function renderLobby() {
@@ -223,7 +244,7 @@ function renderLobby() {
     ? `<p class="team-title">Dupla 1</p>${seatRow(0)}${seatRow(2)}<p class="team-title">Dupla 2</p>${seatRow(1)}${seatRow(3)}`
     : `${seatRow(0)}${seatRow(1)}`;
   const full = !S.seats.includes(null);
-  $app.innerHTML = `
+  mount([['lobby', `
     <div class="screen">
       <div class="panel">
         <h2>Código da sala</h2>
@@ -239,7 +260,7 @@ function renderLobby() {
         ? `<button class="btn gold block" data-act="start" ${full ? '' : 'disabled'}>${full ? 'Começar o jogo' : 'Aguardando jogadores…'}</button>`
         : `<p class="hint">${S.me >= 0 ? 'Aguardando quem criou a sala começar…' : 'A sala está cheia.'}</p>`}
       <button class="btn ghost block" data-act="leave">Sair da sala</button>
-    </div>`;
+    </div>`]]);
 }
 
 function renderGame() {
@@ -261,9 +282,13 @@ function renderGame() {
     </div>`;
   }).join('');
 
+  if (!table.length) onTable.clear();
   const slots = table.map((p) => {
     const won = showTrick && S.lastTrick.winnerSeat === p.seat ? 'won' : '';
-    return `<div class="slot ${pos(p.seat)}">${cardHtml(p.card, `small ${won}`)}</div>`;
+    const key = `${p.seat}:${p.card}`;
+    const fresh = onTable.has(key) ? '' : 'new';
+    onTable.add(key);
+    return `<div class="slot ${pos(p.seat)}">${cardHtml(p.card, `small ${won} ${fresh}`)}</div>`;
   }).join('');
 
   const dots = [0, 1, 2].map((i) => {
@@ -281,7 +306,7 @@ function renderGame() {
 
   const canCall = myTurn && !h.noTruco && h.value < 12 && h.lastRaise !== S.me % 2;
   const t0 = b % 2;
-  $app.innerHTML = `
+  mount([['bar', `
     <div class="bar">
       <div class="score">
         <div class="t us"><small>${esc(teamName(t0))}</small>${S.score[t0]}</div>×
@@ -289,7 +314,7 @@ function renderGame() {
       </div>
       ${h ? `<span class="worth">Vale ${h.value}</span>` : ''}
       <button class="btn small ghost" data-act="exit">Sair</button>
-    </div>
+    </div>`], ['felt', `
     <div class="felt">
       ${others}
       <div class="center">
@@ -297,8 +322,7 @@ function renderGame() {
         ${slots}
         <div class="rounds">${dots}</div>
       </div>
-    </div>
-    ${S.me >= 0 ? `
+    </div>`], ['mine', `${S.me >= 0 ? `
     <div class="mine">
       <div class="status">${esc(status)}</div>
       <div class="hand ${myTurn ? 'active' : ''} ${covered && myTurn ? 'covered' : ''}">
@@ -308,8 +332,7 @@ function renderGame() {
         <button class="btn gold" data-act="truco" ${canCall ? '' : 'disabled'}>${h ? (CALL[NEXT[h.value]] || 'Truco') : 'Truco'}!</button>
         <button class="btn ghost" data-act="cover" ${myTurn && h.rounds.length > 0 ? '' : 'disabled'}>${covered ? 'Jogar aberta' : 'Jogar coberta'}</button>
       </div>
-    </div>` : `<div class="mine"><div class="me-name">${esc(S.seats[b]?.name ?? '')}</div><div class="status">Você está assistindo · ${esc(status)}</div></div>`}
-    ${renderOverlay(showTrick)}`;
+    </div>` : `<div class="mine"><div class="me-name">${esc(S.seats[b]?.name ?? '')}</div><div class="status">Você está assistindo · ${esc(status)}</div></div>`}`], ['overlay', renderOverlay(showTrick)]]);
 }
 
 function renderOverlay(showTrick) {
