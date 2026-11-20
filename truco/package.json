@@ -1,0 +1,9 @@
+{
+  "name": "truco-online",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node dev-server.mjs",
+    "test": "node --test test/game.test.mjs"
+  }
+}
