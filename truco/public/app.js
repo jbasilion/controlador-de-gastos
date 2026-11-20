@@ -47,10 +47,21 @@ async function api(action, extra = {}) {
     headers.apikey = CFG.supabaseKey;
     headers.Authorization = `Bearer ${CFG.supabaseKey}`;
   }
-  const res = await fetch(API, { method: 'POST', headers, body: JSON.stringify({ action, token, code, ...extra }) });
-  const data = await res.json().catch(() => ({ ok: false, error: 'Erro de conexão' }));
+  const asked = code;
+  let data;
+  try {
+    const res = await fetch(API, {
+      method: 'POST', headers, body: JSON.stringify({ action, token, code, ...extra }), signal: AbortSignal.timeout(12000),
+    });
+    data = await res.json();
+  } catch {
+    throw Object.assign(new Error('Sem conexão, tente de novo'), { network: true });
+  }
+  if (!data || typeof data.ok !== 'boolean') throw Object.assign(new Error('Servidor indisponível, tente de novo'), { network: true });
   if (!data.ok) throw new Error(data.error || 'Erro');
-  if (data.code) code = data.code;
+  // Resposta atrasada de uma sala da qual o jogador já saiu: descarta.
+  if (code !== asked) return data;
+  if (action === 'create') code = data.code;
   if (data.state) setState(data.state);
   return data;
 }
@@ -111,6 +122,7 @@ function leaveRoom() {
 }
 
 function setState(s) {
+  if (S && S.code === s.code && s.v < S.v) return;
   const fresh = !S || S.code !== s.code;
   const logMax = s.log.reduce((m, e) => Math.max(m, e.n), 0);
   if (fresh) {
@@ -142,9 +154,8 @@ function teamName(team, s = S) {
 
 function announce(s, e) {
   const who = e.seat === s.me ? 'Você' : s.seats[e.seat]?.name;
-  const plural = e.seat === s.me;
   if (e.t === 'truco') toast(`${who}: ${CALL[e.value].toUpperCase()}!`, 'big');
-  else if (e.t === 'accept') toast(`${who} ${plural ? 'aceitou' : 'aceitou'} — vale ${e.value}`);
+  else if (e.t === 'accept') toast(`${who} aceitou — vale ${e.value}`);
   else if (e.t === 'run') toast(`${who} correu`);
   else if (e.t === 'mao11') toast(e.goes ? `Mão de onze: ${who} vai jogar (vale 3)` : `Mão de onze: ${who} correu`);
   else if (e.t === 'hand') {
@@ -297,7 +308,7 @@ function renderGame() {
         <button class="btn gold" data-act="truco" ${canCall ? '' : 'disabled'}>${h ? (CALL[NEXT[h.value]] || 'Truco') : 'Truco'}!</button>
         <button class="btn ghost" data-act="cover" ${myTurn && h.rounds.length > 0 ? '' : 'disabled'}>${covered ? 'Jogar aberta' : 'Jogar coberta'}</button>
       </div>
-    </div>` : `<div class="mine"><div class="status">Você está assistindo · ${esc(status)}</div></div>`}
+    </div>` : `<div class="mine"><div class="me-name">${esc(S.seats[b]?.name ?? '')}</div><div class="status">Você está assistindo · ${esc(status)}</div></div>`}
     ${renderOverlay(showTrick)}`;
 }
 
@@ -312,7 +323,15 @@ function renderOverlay(showTrick) {
       <button class="btn ghost" data-act="exit">Sair</button>
     </div></div>`;
   }
-  if (!h || S.me < 0 || showTrick) return '';
+  if (!h || S.me < 0) return '';
+  if (S.seats[S.me].bot) {
+    return `<div class="overlay middle"><div class="sheet">
+      <h3>🤖 Um bot está jogando por você</h3>
+      <p>Quem criou a sala colocou um bot no seu lugar enquanto você estava fora.</p>
+      <button class="btn gold" data-act="resume">Voltar ao jogo</button>
+    </div></div>`;
+  }
+  if (showTrick) return '';
   const myTeam = S.me % 2;
   if (h.mao11 && h.mao11.team === myTeam) {
     return `<div class="overlay"><div class="sheet">
@@ -366,7 +385,14 @@ async function joinRoom() {
     enterRoom();
   } catch (e) {
     toast(e.message, 'err');
-    if (!S) { code = null; history.replaceState(null, '', location.pathname); render(); }
+    if (e.network) {
+      const wanted = code;
+      setTimeout(() => { if (code === wanted && !S) joinRoom(); }, 2500);
+    } else if (!S) {
+      code = null;
+      history.replaceState(null, '', location.pathname);
+      render();
+    }
   }
 }
 
@@ -415,6 +441,7 @@ $app.addEventListener('click', async (ev) => {
       break;
     }
     case 'cover': covered = !covered; render(); break;
+    case 'resume': send('join', { name: myName }); break;
     case 'truco': send('truco'); break;
     case 'respond': send('respond', { answer: d.answer }); break;
     case 'mao11': send('mao11', { goes: !!d.goes }); break;
@@ -422,7 +449,9 @@ $app.addEventListener('click', async (ev) => {
 });
 
 $app.addEventListener('keydown', (ev) => {
-  if (ev.key === 'Enter' && ev.target.matches('#name, #code')) $app.querySelector('[data-act="join"], [data-act="create"]')?.click();
+  if (ev.key !== 'Enter') return;
+  if (ev.target.matches('#code')) $app.querySelector('[data-act="join"]')?.click();
+  else if (ev.target.matches('#name') && code) $app.querySelector('[data-act="join"]')?.click();
 });
 document.addEventListener('visibilitychange', () => { if (!document.hidden) poll(); });
 

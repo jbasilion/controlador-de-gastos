@@ -373,6 +373,7 @@ export function applyAction(room, body) {
       needHost();
       lobby();
       if (room.seats.includes(null)) fail('Faltam jogadores');
+      if (!room.seats.some((s) => !s.bot)) fail('Precisa de pelo menos uma pessoa na mesa');
       startMatch(room);
       break;
     case 'rematch':
